@@ -64,7 +64,7 @@ def get_model_memory_requirements():
         "mistralai/Ministral-3-3B-Base-2512": 3.5,
         "mistralai/Ministral-8B-Instruct-2410": 8,
         
-        # Modèles légers
+        # Modèles standards
         "mistralai/Mistral-7B-v0.1": 14,
         "mistralai/Mistral-7B-Instruct-v0.1": 14,
         "mistralai/Mistral-7B-Instruct-v0.2": 14,
@@ -121,7 +121,7 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=3):
                 local_dir=str(local_dir),
                 local_dir_use_symlinks=False,
                 resume_download=True,
-                use_auth_token=True if os.getenv("HF_TOKEN") else None
+                token=os.getenv("HF_TOKEN") or None  # ✅ CORRIGÉ: token au lieu de use_auth_token
             )
             
             # Charger depuis le répertoire local
