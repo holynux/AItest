@@ -7,7 +7,7 @@ Utilisation:
 
 Exemples:
     python chat.py
-    python chat.py --model mistralai/Mistral-7B-v0.1
+    python chat.py --model mistralai/Ministral-3-3B-Instruct-2512
     python chat.py --device cuda:0
     python chat.py --hf-token votre_token_huggingface
 """
@@ -59,21 +59,20 @@ def clear_cache_if_needed():
 def get_model_memory_requirements():
     """Retourne un dictionnaire des exigences mémoire pour tous les modèles"""
     return {
-        # Modèles très légers
-        "mistralai/TinyMistral-248M": 1.5,
+        # Modèles très légers (Ministral)
+        "mistralai/Ministral-3-3B-Instruct-2512": 3.5,
+        "mistralai/Ministral-3-3B-Base-2512": 3.5,
+        "mistralai/Ministral-8B-Instruct-2410": 8,
         
         # Modèles légers
-        "mistralai/Mistral-1.3B": 3,
-        "mistralai/Mistral-2.1B": 4,
-        "mistralai/Mistral-3.1B": 5,
-        
-        # Modèles standards
         "mistralai/Mistral-7B-v0.1": 14,
         "mistralai/Mistral-7B-Instruct-v0.1": 14,
         "mistralai/Mistral-7B-Instruct-v0.2": 14,
+        "mistralai/Mistral-7B-Instruct-v0.3": 14,
         
         # Modèles Mixtes (Mixture of Experts)
         "mistralai/Mixtral-8x7B-v0.1": 48,
+        "mistralai/Mixtral-8x7B-Instruct-v0.1": 48,
         "mistralai/Mixtral-8x22B-v0.1": 120,
     }
 
@@ -153,10 +152,9 @@ def suggest_lighter_models():
     print("-" * 50)
     
     light_models = [
-        ("mistralai/TinyMistral-248M", "248M paramètres", "~1.5 Go VRAM", "Très léger, rapide"),
-        ("mistralai/Mistral-1.3B", "1.3B paramètres", "~3 Go VRAM", "Bon compromis"),
-        ("mistralai/Mistral-2.1B", "2.1B paramètres", "~4 Go VRAM", "Meilleure qualité"),
-        ("mistralai/Mistral-3.1B", "3.1B paramètres", "~5 Go VRAM", "Recommandé pour 6 Go+"),
+        ("mistralai/Ministral-3-3B-Instruct-2512", "3B paramètres", "~3.5 Go VRAM", "Recommandé pour 4 Go"),
+        ("mistralai/Ministral-3-3B-Base-2512", "3B paramètres", "~3.5 Go VRAM", "Version de base"),
+        ("mistralai/Mistral-7B-v0.1", "7B paramètres", "~14 Go VRAM", "Nécessite plus de mémoire"),
     ]
     
     for model, params, vram, desc in light_models:
@@ -165,8 +163,7 @@ def suggest_lighter_models():
     
     print("\n💡 Autres options:")
     print("  • Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
-    print("  • Utilisez la quantification 4-bit: --quantize 4bit")
-    print("  • Essayez des modèles distillés ou optimisés")
+    print("  • Essayez des modèles plus petits si disponibles")
 
 
 def main():
@@ -174,8 +171,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="mistralai/Mistral-7B-v0.1",
-        help="Nom du modèle Mistral à utiliser (par défaut: mistralai/Mistral-7B-v0.1)"
+        default="mistralai/Ministral-3-3B-Instruct-2512",  # Modèle par défaut plus léger
+        help="Nom du modèle Mistral à utiliser (par défaut: mistralai/Ministral-3-3B-Instruct-2512)"
     )
     parser.add_argument(
         "--device",
@@ -210,13 +207,6 @@ def main():
         "--download-only",
         action="store_true",
         help="Télécharger le modèle et quitter (pour vérifier la connexion)"
-    )
-    parser.add_argument(
-        "--quantize",
-        type=str,
-        choices=["4bit", "8bit"],
-        default=None,
-        help="Utiliser la quantification pour réduire la mémoire (4bit ou 8bit)"
     )
     args = parser.parse_args()
 
@@ -267,10 +257,7 @@ def main():
         clear_cache_if_needed()
 
     print(f"\n🔍 Chargement du modèle: {args.model}")
-    print(f"📍 Appareil: {args.device}")
-    if args.quantize:
-        print(f"🔢 Quantification: {args.quantize}")
-    print()
+    print(f"📍 Appareil: {args.device}\n")
 
     # Chargement du tokenizer et du modèle
     try:
@@ -301,15 +288,6 @@ def main():
                 args.model, dtype, device_map
             )
         
-        # Appliquer la quantification si demandée
-        if args.quantize:
-            print(f"🔢 Application de la quantification {args.quantize}...")
-            if args.quantize == "4bit":
-                model = model.to(torch.float8_e4m3fn)  # Simplified 4-bit
-            elif args.quantize == "8bit":
-                model = model.to(torch.float8_e5m2)  # Simplified 8-bit
-            print(f"✅ Modèle quantifié en {args.quantize}")
-        
         if args.device.startswith("cuda"):
             model = model.to(args.device)
         
@@ -324,17 +302,20 @@ def main():
         error_msg = str(e)
         print(f"❌ Erreur lors du chargement du modèle: {error_msg}")
         
-        # Détection spécifique des erreurs de mémoire
-        if "CUDA out of memory" in error_msg or "out of memory" in error_msg.lower():
+        # Détection spécifique des erreurs
+        if "not a local folder and is not a valid model identifier" in error_msg:
+            print("\n⚠️  Modèle non trouvé sur HuggingFace!")
+            print("   Vérifiez le nom du modèle.")
+            suggest_lighter_models()
+        elif "CUDA out of memory" in error_msg or "out of memory" in error_msg.lower():
             print("\n⚠️  Problème de mémoire détecté!")
             suggest_lighter_models()
         
         print("\nSolutions possibles:")
-        print("1. Essayez un modèle plus léger (voir suggestions ci-dessus)")
-        print("2. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
-        print("3. Utilisez --quantize 4bit pour réduire la mémoire")
-        print("4. Fermez d'autres applications utilisant le GPU")
-        print("5. Vérifiez l'espace disque disponible")
+        print("1. Vérifiez le nom du modèle (ex: mistralai/Ministral-3-3B-Instruct-2512)")
+        print("2. Essayez un modèle plus léger")
+        print("3. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
+        print("4. Vérifiez votre connexion internet")
         return
 
     # Création du pipeline de chat
