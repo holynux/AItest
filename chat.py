@@ -20,7 +20,7 @@ import torch
 import warnings
 import requests
 from huggingface_hub import login, whoami, constants, snapshot_download, HfApi
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, MistralForCausalLM
 from pathlib import Path
 
 # Ignorer les avertissements de dépréciation de huggingface_hub
@@ -82,6 +82,18 @@ def get_model_memory_requirements():
     }
 
 
+def get_model_class(model_name):
+    """Retourne la classe de modèle appropriée en fonction du nom"""
+    # Modèles Ministral-3 utilisent MistralForCausalLM
+    if "Ministral-3" in model_name:
+        return MistralForCausalLM
+    # Les autres modèles Mistral utilisent AutoModelForCausalLM
+    elif "Mistral" in model_name or "Mixtral" in model_name:
+        return AutoModelForCausalLM
+    else:
+        return AutoModelForCausalLM
+
+
 def check_gpu_memory(model_name):
     """Vérifie si le GPU a assez de mémoire pour le modèle"""
     model_memory_requirements = get_model_memory_requirements()
@@ -129,7 +141,8 @@ def check_internet_connection():
 
 def download_model_with_retry(model_name, dtype, device_map, max_retries=5):
     """Télécharge le modèle avec gestion des erreurs et reprise"""
-    from transformers import AutoModelForCausalLM
+    # Obtenir la classe de modèle appropriée
+    model_class = get_model_class(model_name)
     
     last_exception = None
     
@@ -168,8 +181,8 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5):
             
             print(f"   ✅ {len(model_files)} fichiers téléchargés")
             
-            # Charger depuis le répertoire local
-            model = AutoModelForCausalLM.from_pretrained(
+            # Charger depuis le répertoire local avec la bonne classe de modèle
+            model = model_class.from_pretrained(
                 str(local_dir),
                 dtype=dtype,
                 device_map=device_map,
@@ -327,7 +340,9 @@ def main():
         print("📥 Téléchargement du modèle (cela peut prendre du temps)...")
         
         if args.local_model:
-            model = AutoModelForCausalLM.from_pretrained(
+            # Obtenir la classe de modèle appropriée
+            model_class = get_model_class(args.model)
+            model = model_class.from_pretrained(
                 args.model,
                 dtype=dtype,
                 device_map=device_map,
@@ -360,6 +375,10 @@ def main():
         elif "CUDA out of memory" in error_msg or "out of memory" in error_msg.lower():
             print("\n⚠️  Problème de mémoire détecté!")
             suggest_lighter_models()
+        elif "Unrecognized configuration class" in error_msg:
+            print("\n⚠️  Problème de configuration détecté!")
+            print("   Le modèle utilise une configuration non reconnue.")
+            print("   Essayez avec --local-model si le modèle est déjà téléchargé.")
         elif "Connection" in error_msg or "Timeout" in error_msg or "RST" in error_msg:
             print("\n⚠️  Problème de connexion réseau détecté!")
             print("   Essayez ces solutions:")
