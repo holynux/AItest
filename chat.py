@@ -33,6 +33,11 @@ def get_cache_dir():
     return Path(constants.HF_HUB_CACHE)
 
 
+def get_local_model_path(model_name):
+    """Retourne le chemin local du modèle"""
+    return get_cache_dir() / "models" / model_name.replace("/", "--")
+
+
 def check_disk_space(model_name, required_space_gb=14):
     """Vérifie l'espace disque disponible"""
     import shutil
@@ -156,6 +161,26 @@ def check_internet_connection():
     return False
 
 
+def check_model_files_exist(local_dir):
+    """Vérifie si les fichiers du modèle existent dans le répertoire local"""
+    # Chercher tous les fichiers de modèle
+    model_files = list(local_dir.glob("**/*.safetensors")) + list(local_dir.glob("**/*.bin"))
+    config_files = list(local_dir.glob("**/config.json"))
+    
+    if not model_files:
+        print(f"⚠️  Aucun fichier de modèle trouvé dans {local_dir}")
+        print("   Vérifiez que le modèle a été téléchargé")
+        return False
+    
+    if not config_files:
+        print(f"⚠️  Aucun fichier config.json trouvé dans {local_dir}")
+        print("   Le modèle peut être incomplet")
+        return False
+    
+    print(f"✅ {len(model_files)} fichiers de modèle et {len(config_files)} config trouvés")
+    return True
+
+
 def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quantization=None):
     """Télécharge le modèle avec gestion des erreurs et reprise"""
     # Obtenir la classe de modèle appropriée
@@ -178,7 +203,7 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
                     raise Exception("Impossible de se connecter à HuggingFace Hub")
             
             # Utiliser snapshot_download, puis charger le modèle localement
-            local_dir = get_cache_dir() / "models" / model_name.replace("/", "--")
+            local_dir = get_local_model_path(model_name)
             local_dir.mkdir(parents=True, exist_ok=True)
             
             # Télécharger avec la nouvelle API
@@ -192,11 +217,8 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
             )
             
             # Vérifier que les fichiers ont été téléchargés
-            model_files = list(local_dir.glob("**/*.bin")) + list(local_dir.glob("**/*.safetensors"))
-            if not model_files:
-                raise Exception("Aucun fichier de modèle trouvé après téléchargement")
-            
-            print(f"   ✅ {len(model_files)} fichiers téléchargés")
+            if not check_model_files_exist(local_dir):
+                raise Exception("Fichiers du modèle manquants après téléchargement")
             
             # Charger depuis le répertoire local avec la bonne classe de modèle
             # Pour Ministral-3, il faut utiliser trust_remote_code=True
@@ -223,7 +245,6 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
                         str(local_dir),
                         dtype=dtype,
                         device_map=device_map,
-                        local_files_only=True,
                         trust_remote_code=is_ministral3,
                         quantization_config=quantization_config
                     )
@@ -238,7 +259,6 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
                     str(local_dir),
                     dtype=dtype,
                     device_map=device_map,
-                    local_files_only=True,
                     trust_remote_code=is_ministral3
                 )
             
@@ -294,7 +314,7 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
                     repetition_penalty=1.1,
                     pad_token_id=eos_token_id,
                     eos_token_id=eos_token_id,
-                    early_stopping=True  # ✅ Arrêter à eos_token_id
+                    early_stopping=True  # ✅ Arrête à eos_token_id
                 )
             else:
                 # Pour Mistral3Model qui retourne Mistral3ModelOutputWithPast
@@ -475,52 +495,28 @@ def main():
         device_map = args.device if args.device.startswith("cuda") else "cpu"
         
         # Charger le modèle
-        print("📥 Téléchargement du modèle (cela peut prendre du temps)...")
+        print("📥 Chargement du modèle...")
         
         if args.local_model:
+            # Vérifier que les fichiers existent localement
+            local_dir = get_local_model_path(args.model)
+            if not check_model_files_exist(local_dir):
+                print(f"\n❌ Modèle non trouvé dans {local_dir}")
+                print("   Utilisez d'abord --download-only pour télécharger le modèle")
+                print(f"   Ou vérifiez que le modèle est dans: {local_dir}")
+                return
+            
             # Obtenir la classe de modèle appropriée
             model_class = get_model_class(args.model)
             is_ministral3 = "Ministral-3" in args.model
             
-            # Si quantification demandée, utiliser BitsAndBytesConfig
-            if args.quantize:
-                try:
-                    from transformers import BitsAndBytesConfig
-                    
-                    if args.quantize == "4bit":
-                        quantization_config = BitsAndBytesConfig(
-                            load_in_4bit=True,
-                            bnb_4bit_compute_dtype=dtype,
-                            bnb_4bit_quant_type="nf4",
-                            bnb_4bit_use_double_quant=False
-                        )
-                    elif args.quantize == "8bit":
-                        quantization_config = BitsAndBytesConfig(
-                            load_in_8bit=True
-                        )
-                    
-                    model = model_class.from_pretrained(
-                        args.model,
-                        dtype=dtype,
-                        device_map=device_map,
-                        local_files_only=True,
-                        trust_remote_code=is_ministral3,
-                        quantization_config=quantization_config
-                    )
-                except ImportError:
-                    print("⚠️  bitsandbytes non installé. Installation...")
-                    import subprocess
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "bitsandbytes", "accelerate", "--quiet"])
-                    print("✅ bitsandbytes installé. Veuillez réessayer.")
-                    sys.exit(1)
-            else:
-                model = model_class.from_pretrained(
-                    args.model,
-                    dtype=dtype,
-                    device_map=device_map,
-                    local_files_only=True,
-                    trust_remote_code=is_ministral3
-                )
+            # Charger depuis le chemin local
+            model = model_class.from_pretrained(
+                str(local_dir),
+                dtype=dtype,
+                device_map=device_map,
+                trust_remote_code=is_ministral3
+            )
         else:
             model = download_model_with_retry(
                 args.model, dtype, device_map, max_retries=args.max_retries, quantization=args.quantize
@@ -541,7 +537,14 @@ def main():
         print(f"❌ Erreur lors du chargement du modèle: {error_msg}")
         
         # Détection spécifique des erreurs
-        if "not a local folder and is not a valid model identifier" in error_msg:
+        if "does not appear to have files named" in error_msg:
+            print("\n⚠️  Structure de fichiers du modèle modifiée!")
+            print(f"   Le modèle {args.model} a peut-être été mis à jour sur HuggingFace")
+            print("   Solution 1: Supprimez le cache et retéléchargez")
+            print(f"      rm -rf {get_local_model_path(args.model)}")
+            print("   Solution 2: Utilisez --download-only pour retélécharger")
+            print("   Solution 3: Vérifiez les fichiers disponibles sur HuggingFace")
+        elif "not a local folder and is not a valid model identifier" in error_msg:
             print("\n⚠️  Modèle non trouvé sur HuggingFace!")
             print("   Vérifiez le nom du modèle.")
             suggest_lighter_models()
@@ -567,11 +570,11 @@ def main():
             print("   4. Utilisez --download-only pour télécharger d'abord")
         
         print("\nSolutions possibles:")
-        print("1. Mettez à jour transformers: pip install --upgrade transformers")
-        print("2. Vérifiez le nom du modèle (ex: mistralai/Mistral-7B-v0.1)")
-        print("3. Essayez un modèle plus léger")
-        print("4. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
-        print("5. Utilisez --quantize 4bit pour réduire la mémoire")
+        print("1. Supprimez le cache: rm -rf ~/.cache/huggingface/hub/models--mistralai--Mistral-7B-v0.1")
+        print("2. Retéléchargez: python chat.py --model mistralai/Mistral-7B-v0.1 --download-only --hf-token VOTRE_TOKEN")
+        print("3. Vérifiez le nom du modèle (ex: mistralai/Mistral-7B-v0.1)")
+        print("4. Essayez un modèle plus léger")
+        print("5. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
         print("6. Vérifiez votre connexion internet")
         return
 
