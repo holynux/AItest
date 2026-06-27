@@ -310,7 +310,8 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
             response = response[len(prompt):]
         
         # Supprimer les tokens spéciaux
-        for token in ["[INST]", "[/INST]", "<s>", "</s>", "<|im_start|>", "<|im_end|>"):
+        tokens_to_remove = ["[INST]", "[/INST]", "<s>", "</s>", "<|im_start|", "<|im_end|"]
+        for token in tokens_to_remove:
             response = response.replace(token, "")
         
         return response.strip()
