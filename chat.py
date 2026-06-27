@@ -251,17 +251,14 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
 def generate_response(model, tokenizer, messages, max_new_tokens=512, temperature=0.7):
     """Génère une réponse en utilisant une approche simple et fiable"""
     try:
-        # Formater les messages de manière simple et efficace
-        # Pour Ministral-3, utiliser un format basique
-        prompt = ""
+        # Formater les messages pour Mistral/Ministral-3
+        # Utiliser le format officiel Mistral avec [INST] et [/INST]
+        prompt = "[INST] "
         for msg in messages:
             if msg['role'] == 'user':
-                prompt += f"[INST] {msg['content']} [/INST] "
-            else:
+                prompt += f"{msg['content']} [/INST] "
+            elif msg['role'] == 'assistant':
                 prompt += f"{msg['content']} "
-        
-        # Ajouter un espace et s'assurer que ça se termine bien
-        prompt = prompt.strip() + " "
         
         # Tokenizer le prompt
         inputs = tokenizer(prompt, return_tensors="pt")
@@ -302,11 +299,14 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
         response = tokenizer.decode(outputs[0], skip_special_tokens=True)
         
         # Nettoyer la réponse
-        # Supprimer le prompt de la réponse
-        if prompt in response:
-            response = response[len(prompt):]
+        # Supprimer le prompt initial
+        if "[INST]" in response:
+            # Trouver la fin du dernier [/INST] et prendre ce qui suit
+            last_inst_end = response.rfind("[/INST]")
+            if last_inst_end != -1:
+                response = response[last_inst_end + len("[/INST]"):]
         
-        # Supprimer les tokens spéciaux
+        # Supprimer les tokens spéciaux restants
         tokens_to_remove = ['[INST]', '[/INST]', '<s>', '</s>']
         for token in tokens_to_remove:
             response = response.replace(token, "")
@@ -567,7 +567,8 @@ def main():
 
     # Utiliser la génération directe au lieu du pipeline (pour éviter les bugs de version)
     print("💬 Bienvenue dans le chat Mistral!")
-    print("Tapez 'quit', 'exit' ou 'q' pour quitter.\n")
+    print("Tapez 'quit', 'exit' ou 'q' pour quitter.")
+    print("Astuce: Pour une meilleure conversation, posez des questions complètes.\n")
 
     # Boucle de conversation
     messages = []
