@@ -17,9 +17,13 @@ import os
 import sys
 import time
 import torch
+import warnings
 from huggingface_hub import login, whoami, constants, snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from pathlib import Path
+
+# Ignorer les avertissements de dépréciation de huggingface_hub
+warnings.filterwarnings("ignore", category=UserWarning, module="huggingface_hub")
 
 
 def get_cache_dir():
@@ -111,17 +115,15 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=3):
         try:
             print(f"📥 Tentative {attempt + 1}/{max_retries} de téléchargement de {model_name}")
             
-            # Utiliser snapshot_download pour la reprise, puis charger le modèle localement
+            # Utiliser snapshot_download, puis charger le modèle localement
             local_dir = get_cache_dir() / "models" / model_name.replace("/", "--")
             local_dir.mkdir(parents=True, exist_ok=True)
             
-            # Télécharger avec reprise
+            # Télécharger avec la nouvelle API (sans paramètres dépréciés)
             snapshot_download(
                 repo_id=model_name,
                 local_dir=str(local_dir),
-                local_dir_use_symlinks=False,
-                resume_download=True,
-                token=os.getenv("HF_TOKEN") or None  # ✅ CORRIGÉ: token au lieu de use_auth_token
+                token=os.getenv("HF_TOKEN") or None
             )
             
             # Charger depuis le répertoire local
