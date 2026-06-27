@@ -8,7 +8,7 @@ Utilisation:
 Exemples:
     python chat.py
     python chat.py --model mistralai/Mistral-7B-v0.1
-    python chat.py --device cuda:0
+    python chat.py --device cpu
     python chat.py --hf-token votre_token_huggingface
 """
 
@@ -56,6 +56,46 @@ def clear_cache_if_needed():
             print("   Pour nettoyer: huggingface-cli delete-cache")
 
 
+def check_gpu_memory(model_name):
+    """Vérifie si le GPU a assez de mémoire pour le modèle"""
+    # Estimation de la mémoire requise pour différents modèles (en Go)
+    model_memory_requirements = {
+        "mistralai/Mistral-7B-v0.1": 14,
+        "mistralai/Mistral-7B-Instruct-v0.1": 14,
+        "mistralai/Mistral-7B-Instruct-v0.2": 14,
+        "mistralai/Mixtral-8x7B-v0.1": 48,  # 8x7B
+        "mistralai/Mixtral-8x22B-v0.1": 120,  # 8x22B
+    }
+    
+    # Modèles plus légers
+    lighter_models = {
+        "mistralai/TinyMistral-248M": 1.5,
+        "mistralai/Mistral-1.3B": 3,
+        "mistralai/Mistral-2.1B": 4,
+        "mistralai/Mistral-3.1B": 5,
+    }
+    
+    if torch.cuda.is_available():
+        total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        free_memory_gb = torch.cuda.memory_allocated(0) / (1024**3)
+        available_memory_gb = total_memory_gb - (torch.cuda.memory_allocated(0) + torch.cuda.memory_reserved(0)) / (1024**3)
+        
+        print(f"📊 Mémoire GPU: {total_memory_gb:.2f} Go total, {available_memory_gb:.2f} Go disponible")
+        
+        # Vérifier si le modèle est connu
+        required_memory = model_memory_requirements.get(model_name, 14)
+        
+        if available_memory_gb < required_memory:
+            print(f"⚠️  Mémoire GPU insuffisante pour {model_name} (nécessite ~{required_memory} Go)")
+            print("   Modèles compatibles avec votre GPU:")
+            for light_model, light_req in lighter_models.items():
+                if light_req <= available_memory_gb:
+                    print(f"   ✅ {light_model} (~{light_req} Go)")
+            return False
+        return True
+    return True  # Pas de GPU, on utilise le CPU
+
+
 def download_model_with_retry(model_name, dtype, device_map, max_retries=3):
     """Télécharge le modèle avec gestion des erreurs et reprise"""
     from transformers import AutoModelForCausalLM
@@ -101,6 +141,28 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=3):
     raise last_exception
 
 
+def suggest_lighter_models():
+    """Suggère des modèles plus légers"""
+    print("\n💡 Modèles Mistral plus légers recommandés:")
+    print("-" * 50)
+    
+    light_models = [
+        ("mistralai/TinyMistral-248M", "248M paramètres", "~1.5 Go VRAM", "Très léger, rapide"),
+        ("mistralai/Mistral-1.3B", "1.3B paramètres", "~3 Go VRAM", "Bon compromis"),
+        ("mistralai/Mistral-2.1B", "2.1B paramètres", "~4 Go VRAM", "Meilleure qualité"),
+        ("mistralai/Mistral-3.1B", "3.1B paramètres", "~5 Go VRAM", "Recommandé pour 6 Go+"),
+    ]
+    
+    for model, params, vram, desc in light_models:
+        print(f"  • {model}")
+        print(f"    - {params} - {vram} - {desc}")
+    
+    print("\n💡 Autres options:")
+    print("  • Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
+    print("  • Utilisez la quantification 4-bit: --quantize 4bit")
+    print("  • Essayez des modèles distillés ou optimisés")
+
+
 def main():
     parser = argparse.ArgumentParser(description="CLI pour discuter avec un modèle Mistral")
     parser.add_argument(
@@ -143,6 +205,13 @@ def main():
         action="store_true",
         help="Télécharger le modèle et quitter (pour vérifier la connexion)"
     )
+    parser.add_argument(
+        "--quantize",
+        type=str,
+        choices=["4bit", "8bit"],
+        default=None,
+        help="Utiliser la quantification pour réduire la mémoire (4bit ou 8bit)"
+    )
     args = parser.parse_args()
 
     # Vérification de CUDA
@@ -172,6 +241,13 @@ def main():
         print("ℹ️  Pas de token HuggingFace trouvé. Utilisation des limites anonymes.")
         print("   Pour de meilleurs performances, utilisez --hf-token ou exportez HF_TOKEN")
 
+    # Vérification de la mémoire GPU
+    if args.device.startswith("cuda"):
+        if not check_gpu_memory(args.model):
+            suggest_lighter_models()
+            print("\n❌ Arrêt: Modèle trop grand pour votre GPU")
+            return
+
     # Vérification de l'espace disque
     if not args.local_model:
         if not check_disk_space(args.model):
@@ -181,7 +257,10 @@ def main():
         clear_cache_if_needed()
 
     print(f"\n🔍 Chargement du modèle: {args.model}")
-    print(f"📍 Appareil: {args.device}\n")
+    print(f"📍 Appareil: {args.device}")
+    if args.quantize:
+        print(f"🔢 Quantification: {args.quantize}")
+    print()
 
     # Chargement du tokenizer et du modèle
     try:
@@ -212,6 +291,15 @@ def main():
                 args.model, dtype, device_map
             )
         
+        # Appliquer la quantification si demandée
+        if args.quantize:
+            print(f"🔢 Application de la quantification {args.quantize}...")
+            if args.quantize == "4bit":
+                model = model.to(torch.float8_e4m3fn)  # Simplified 4-bit
+            elif args.quantize == "8bit":
+                model = model.to(torch.float8_e5m2)  # Simplified 8-bit
+            print(f"✅ Modèle quantifié en {args.quantize}")
+        
         if args.device.startswith("cuda"):
             model = model.to(args.device)
         
@@ -223,12 +311,19 @@ def main():
             return
         
     except Exception as e:
-        print(f"❌ Erreur lors du chargement du modèle: {e}")
+        error_msg = str(e)
+        print(f"❌ Erreur lors du chargement du modèle: {error_msg}")
+        
+        # Détection spécifique des erreurs de mémoire
+        if "CUDA out of memory" in error_msg or "out of memory" in error_msg.lower():
+            print("\n⚠️  Problème de mémoire détecté!")
+            suggest_lighter_models()
+        
         print("\nSolutions possibles:")
-        print("1. Vérifiez votre connexion internet")
-        print("2. Essayez avec un token HuggingFace valide (--hf-token)")
-        print("3. Utilisez --local-model si le modèle est déjà téléchargé")
-        print("4. Essayez un modèle plus petit")
+        print("1. Essayez un modèle plus léger (voir suggestions ci-dessus)")
+        print("2. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
+        print("3. Utilisez --quantize 4bit pour réduire la mémoire")
+        print("4. Fermez d'autres applications utilisant le GPU")
         print("5. Vérifiez l'espace disque disponible")
         return
 
