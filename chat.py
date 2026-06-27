@@ -8,7 +8,7 @@ Utilisation:
 Exemples:
     python chat.py
     python chat.py --model mistralai/Mistral-7B-v0.1
-    python chat.py --device cpu
+    python chat.py --device cuda:0
     python chat.py --hf-token votre_token_huggingface
 """
 
@@ -56,39 +56,45 @@ def clear_cache_if_needed():
             print("   Pour nettoyer: huggingface-cli delete-cache")
 
 
-def check_gpu_memory(model_name):
-    """Vérifie si le GPU a assez de mémoire pour le modèle"""
-    # Estimation de la mémoire requise pour différents modèles (en Go)
-    model_memory_requirements = {
-        "mistralai/Mistral-7B-v0.1": 14,
-        "mistralai/Mistral-7B-Instruct-v0.1": 14,
-        "mistralai/Mistral-7B-Instruct-v0.2": 14,
-        "mistralai/Mixtral-8x7B-v0.1": 48,  # 8x7B
-        "mistralai/Mixtral-8x22B-v0.1": 120,  # 8x22B
-    }
-    
-    # Modèles plus légers
-    lighter_models = {
+def get_model_memory_requirements():
+    """Retourne un dictionnaire des exigences mémoire pour tous les modèles"""
+    return {
+        # Modèles très légers
         "mistralai/TinyMistral-248M": 1.5,
+        
+        # Modèles légers
         "mistralai/Mistral-1.3B": 3,
         "mistralai/Mistral-2.1B": 4,
         "mistralai/Mistral-3.1B": 5,
+        
+        # Modèles standards
+        "mistralai/Mistral-7B-v0.1": 14,
+        "mistralai/Mistral-7B-Instruct-v0.1": 14,
+        "mistralai/Mistral-7B-Instruct-v0.2": 14,
+        
+        # Modèles Mixtes (Mixture of Experts)
+        "mistralai/Mixtral-8x7B-v0.1": 48,
+        "mistralai/Mixtral-8x22B-v0.1": 120,
     }
+
+
+def check_gpu_memory(model_name):
+    """Vérifie si le GPU a assez de mémoire pour le modèle"""
+    model_memory_requirements = get_model_memory_requirements()
     
     if torch.cuda.is_available():
         total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        free_memory_gb = torch.cuda.memory_allocated(0) / (1024**3)
         available_memory_gb = total_memory_gb - (torch.cuda.memory_allocated(0) + torch.cuda.memory_reserved(0)) / (1024**3)
         
         print(f"📊 Mémoire GPU: {total_memory_gb:.2f} Go total, {available_memory_gb:.2f} Go disponible")
         
-        # Vérifier si le modèle est connu
+        # Vérifier si le modèle est connu, sinon estimer à 14 Go (pour les modèles Mistral-7B par défaut)
         required_memory = model_memory_requirements.get(model_name, 14)
         
         if available_memory_gb < required_memory:
             print(f"⚠️  Mémoire GPU insuffisante pour {model_name} (nécessite ~{required_memory} Go)")
             print("   Modèles compatibles avec votre GPU:")
-            for light_model, light_req in lighter_models.items():
+            for light_model, light_req in model_memory_requirements.items():
                 if light_req <= available_memory_gb:
                     print(f"   ✅ {light_model} (~{light_req} Go)")
             return False
@@ -250,7 +256,11 @@ def main():
 
     # Vérification de l'espace disque
     if not args.local_model:
-        if not check_disk_space(args.model):
+        # Estimer l'espace disque nécessaire en fonction du modèle
+        model_memory_requirements = get_model_memory_requirements()
+        required_space = model_memory_requirements.get(args.model, 14)
+        
+        if not check_disk_space(args.model, required_space_gb=required_space):
             print("❌ Espace disque insuffisant pour télécharger le modèle")
             return
         
