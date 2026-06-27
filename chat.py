@@ -10,7 +10,7 @@ Exemples:
     python chat.py --model mistralai/Mistral-7B-v0.1
     python chat.py --device cuda:0
     python chat.py --hf-token votre_token_huggingface
-    python chat.py --model mistralai/Ministral-3-3B-Base-2512 --quantize 4bit
+    python chat.py --model mistralai/Mistral-7B-v0.1 --device cpu --local-model
 """
 
 import argparse
@@ -93,6 +93,15 @@ def get_model_class(model_name):
         return MistralForCausalLM
     else:
         return AutoModelForCausalLM
+
+
+def get_mistral_eos_token_id(tokenizer):
+    """Retourne l'eos_token_id approprié pour les modèles Mistral"""
+    # Pour Mistral, l'eos_token_id est généralement 2
+    if tokenizer.eos_token_id is not None:
+        return tokenizer.eos_token_id
+    # Sinon, utiliser 2 (valeur par défaut pour Mistral)
+    return 2
 
 
 def check_gpu_memory(model_name, quantization=None):
@@ -249,10 +258,9 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
 
 
 def generate_response(model, tokenizer, messages, max_new_tokens=512, temperature=0.7):
-    """Génère une réponse en utilisant une approche ultra-simple"""
+    """Génère une réponse en utilisant une approche simple avec eos_token_id forcé"""
     try:
-        # Formater les messages de manière ULTRA-SIMPLE
-        # Ne PAS utiliser de tokens spéciaux, juste du texte brut
+        # Formater les messages de manière simple
         prompt = ""
         for msg in messages:
             if msg['role'] == 'user':
@@ -270,29 +278,36 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
         device = next(model.parameters()).device
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
-        # Générer la réponse
+        # Obtenir l'eos_token_id approprié pour Mistral
+        eos_token_id = get_mistral_eos_token_id(tokenizer)
+        
+        # Générer la réponse avec max_length pour éviter les boucles infinies
         with torch.no_grad():
             if hasattr(model, 'generate'):
                 # Méthode standard pour les modèles avec generate
                 outputs = model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
+                    max_length=len(inputs['input_ids'][0]) + max_new_tokens,
                     temperature=temperature,
                     do_sample=True,
                     repetition_penalty=1.1,
-                    pad_token_id=tokenizer.eos_token_id,
-                    eos_token_id=tokenizer.eos_token_id
+                    pad_token_id=eos_token_id,
+                    eos_token_id=eos_token_id,
+                    early_stopping=True  # ✅ Arrêter à eos_token_id
                 )
             else:
                 # Pour Mistral3Model qui retourne Mistral3ModelOutputWithPast
                 outputs = model(
                     **inputs,
                     max_new_tokens=max_new_tokens,
+                    max_length=len(inputs['input_ids'][0]) + max_new_tokens,
                     temperature=temperature,
                     do_sample=True,
                     repetition_penalty=1.1,
-                    pad_token_id=tokenizer.eos_token_id,
-                    eos_token_id=tokenizer.eos_token_id
+                    pad_token_id=eos_token_id,
+                    eos_token_id=eos_token_id,
+                    early_stopping=True
                 )
                 # Accéder à last_hidden_state
                 outputs = outputs.last_hidden_state
@@ -341,7 +356,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="mistralai/Mistral-7B-v0.1",  # Changé pour un modèle plus testé
+        default="mistralai/Mistral-7B-v0.1",  # Modèle par défaut
         help="Nom du modèle Mistral à utiliser (par défaut: mistralai/Mistral-7B-v0.1)"
     )
     parser.add_argument(
@@ -359,8 +374,8 @@ def main():
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=512,
-        help="Nombre maximum de nouveaux tokens à générer"
+        default=256,  # Réduit pour éviter les boucles
+        help="Nombre maximum de nouveaux tokens à générer (par défaut: 256)"
     )
     parser.add_argument(
         "--temperature",
