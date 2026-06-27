@@ -7,7 +7,7 @@ Utilisation:
 
 Exemples:
     python chat.py
-    python chat.py --model mistralai/Ministral-3-3B-Instruct-2512
+    python chat.py --model mistralai/Mistral-7B-v0.1
     python chat.py --device cuda:0
     python chat.py --hf-token votre_token_huggingface
     python chat.py --model mistralai/Ministral-3-3B-Base-2512 --quantize 4bit
@@ -249,16 +249,19 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
 
 
 def generate_response(model, tokenizer, messages, max_new_tokens=512, temperature=0.7):
-    """Génère une réponse en utilisant une approche simple et fiable"""
+    """Génère une réponse en utilisant une approche ultra-simple"""
     try:
-        # Formater les messages pour Mistral/Ministral-3
-        # Utiliser le format officiel Mistral avec [INST] et [/INST]
-        prompt = "[INST] "
+        # Formater les messages de manière ULTRA-SIMPLE
+        # Ne PAS utiliser de tokens spéciaux, juste du texte brut
+        prompt = ""
         for msg in messages:
             if msg['role'] == 'user':
-                prompt += f"{msg['content']} [/INST] "
+                prompt += f"User: {msg['content']}\n"
             elif msg['role'] == 'assistant':
-                prompt += f"{msg['content']} "
+                prompt += f"Assistant: {msg['content']}\n"
+        
+        # Ajouter un prompt pour l'assistant
+        prompt += "Assistant: "
         
         # Tokenizer le prompt
         inputs = tokenizer(prompt, return_tensors="pt")
@@ -298,18 +301,9 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
         # Décoder la réponse
         response = tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # Nettoyer la réponse
-        # Supprimer le prompt initial
-        if "[INST]" in response:
-            # Trouver la fin du dernier [/INST] et prendre ce qui suit
-            last_inst_end = response.rfind("[/INST]")
-            if last_inst_end != -1:
-                response = response[last_inst_end + len("[/INST]"):]
-        
-        # Supprimer les tokens spéciaux restants
-        tokens_to_remove = ['[INST]', '[/INST]', '<s>', '</s>']
-        for token in tokens_to_remove:
-            response = response.replace(token, "")
+        # Nettoyer la réponse : supprimer tout avant "Assistant: "
+        if "Assistant: " in response:
+            response = response.split("Assistant: ")[-1]
         
         # Nettoyer les espaces multiples
         response = ' '.join(response.split())
@@ -326,9 +320,10 @@ def suggest_lighter_models():
     print("-" * 50)
     
     light_models = [
-        ("mistralai/Ministral-3-3B-Instruct-2512", "3B paramètres", "~3.5 Go VRAM", "Recommandé pour 4 Go"),
+        ("mistralai/Mistral-7B-v0.1", "7B paramètres", "~14 Go VRAM", "Standard"),
+        ("mistralai/Mistral-7B-Instruct-v0.1", "7B paramètres", "~14 Go VRAM", "Optimisé pour les instructions"),
+        ("mistralai/Ministral-3-3B-Instruct-2512", "3B paramètres", "~3.5 Go VRAM", "Léger"),
         ("mistralai/Ministral-3-3B-Base-2512", "3B paramètres", "~3.5 Go VRAM", "Version de base"),
-        ("mistralai/Mistral-7B-v0.1", "7B paramètres", "~14 Go VRAM", "Nécessite plus de mémoire"),
     ]
     
     for model, params, vram, desc in light_models:
@@ -346,8 +341,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="mistralai/Ministral-3-3B-Instruct-2512",  # Modèle par défaut plus léger
-        help="Nom du modèle Mistral à utiliser (par défaut: mistralai/Ministral-3-3B-Instruct-2512)"
+        default="mistralai/Mistral-7B-v0.1",  # Changé pour un modèle plus testé
+        help="Nom du modèle Mistral à utiliser (par défaut: mistralai/Mistral-7B-v0.1)"
     )
     parser.add_argument(
         "--device",
@@ -558,7 +553,7 @@ def main():
         
         print("\nSolutions possibles:")
         print("1. Mettez à jour transformers: pip install --upgrade transformers")
-        print("2. Vérifiez le nom du modèle (ex: mistralai/Ministral-3-3B-Instruct-2512)")
+        print("2. Vérifiez le nom du modèle (ex: mistralai/Mistral-7B-v0.1)")
         print("3. Essayez un modèle plus léger")
         print("4. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
         print("5. Utilisez --quantize 4bit pour réduire la mémoire")
@@ -568,7 +563,7 @@ def main():
     # Utiliser la génération directe au lieu du pipeline (pour éviter les bugs de version)
     print("💬 Bienvenue dans le chat Mistral!")
     print("Tapez 'quit', 'exit' ou 'q' pour quitter.")
-    print("Astuce: Pour une meilleure conversation, posez des questions complètes.\n")
+    print("Astuce: Posez des questions complètes pour de meilleures réponses.\n")
 
     # Boucle de conversation
     messages = []
