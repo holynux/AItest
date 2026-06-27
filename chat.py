@@ -84,12 +84,13 @@ def get_model_memory_requirements():
 
 def get_model_class(model_name):
     """Retourne la classe de modèle appropriée en fonction du nom"""
-    # Modèles Ministral-3 utilisent MistralForCausalLM
+    # Pour les modèles Mistral-3, utiliser AutoModelForCausalLM avec trust_remote_code
+    # car Mistral3ForCausalLM n'existe pas encore dans transformers
     if "Ministral-3" in model_name:
-        return MistralForCausalLM
-    # Les autres modèles Mistral utilisent AutoModelForCausalLM
-    elif "Mistral" in model_name or "Mixtral" in model_name:
         return AutoModelForCausalLM
+    # Pour les autres modèles Mistral
+    elif "Mistral" in model_name or "Mixtral" in model_name:
+        return MistralForCausalLM
     else:
         return AutoModelForCausalLM
 
@@ -182,11 +183,15 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5):
             print(f"   ✅ {len(model_files)} fichiers téléchargés")
             
             # Charger depuis le répertoire local avec la bonne classe de modèle
+            # Pour Ministral-3, il faut utiliser trust_remote_code=True
+            is_ministral3 = "Ministral-3" in model_name
+            
             model = model_class.from_pretrained(
                 str(local_dir),
                 dtype=dtype,
                 device_map=device_map,
-                local_files_only=True
+                local_files_only=True,
+                trust_remote_code=is_ministral3  # ✅ Important pour Ministral-3
             )
             return model
             
@@ -342,11 +347,14 @@ def main():
         if args.local_model:
             # Obtenir la classe de modèle appropriée
             model_class = get_model_class(args.model)
+            is_ministral3 = "Ministral-3" in args.model
+            
             model = model_class.from_pretrained(
                 args.model,
                 dtype=dtype,
                 device_map=device_map,
-                local_files_only=True
+                local_files_only=True,
+                trust_remote_code=is_ministral3  # ✅ Important pour Ministral-3
             )
         else:
             model = download_model_with_retry(
@@ -377,8 +385,12 @@ def main():
             suggest_lighter_models()
         elif "Unrecognized configuration class" in error_msg:
             print("\n⚠️  Problème de configuration détecté!")
-            print("   Le modèle utilise une configuration non reconnue.")
             print("   Essayez avec --local-model si le modèle est déjà téléchargé.")
+            print("   Pour Ministral-3, assurez-vous d'utiliser trust_remote_code=True")
+        elif "'dict' object has no attribute 'to_dict'" in error_msg:
+            print("\n⚠️  Problème de configuration Ministral-3 détecté!")
+            print("   Solution: Utilisez --local-model avec les fichiers déjà téléchargés")
+            print("   Ou attendez la mise à jour de transformers")
         elif "Connection" in error_msg or "Timeout" in error_msg or "RST" in error_msg:
             print("\n⚠️  Problème de connexion réseau détecté!")
             print("   Essayez ces solutions:")
