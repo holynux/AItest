@@ -15,15 +15,16 @@ Exemples:
 import argparse
 import os
 import sys
+import time
 import torch
-from huggingface_hub import login, HfFolder, whoami
+from huggingface_hub import login, whoami, constants
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from pathlib import Path
 
 
 def get_cache_dir():
     """Retourne le répertoire de cache HuggingFace"""
-    return Path(HfFolder.get_cache_path())
+    return Path(constants.HF_HUB_CACHE)
 
 
 def check_disk_space(model_name, required_space_gb=14):
@@ -58,7 +59,6 @@ def clear_cache_if_needed():
 def download_model_with_retry(model_name, dtype, device_map, max_retries=3):
     """Télécharge le modèle avec gestion des erreurs et reprise"""
     from transformers import AutoModelForCausalLM
-    import time
     
     last_exception = None
     
@@ -73,7 +73,6 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=3):
                 resume_download=True,  # Reprise du téléchargement
                 force_download=False,  # Utiliser le cache si disponible
                 local_files_only=False,
-                # Options pour éviter les timeouts
                 use_auth_token=True if os.getenv("HF_TOKEN") else None
             )
             return model
