@@ -249,24 +249,19 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
 
 
 def generate_response(model, tokenizer, messages, max_new_tokens=512, temperature=0.7):
-    """Génère une réponse sans utiliser le pipeline (pour éviter les bugs de version)"""
+    """Génère une réponse en utilisant une approche simple et fiable"""
     try:
-        # Formater les messages pour Mistral/Ministral-3
-        # Utiliser le chat template du tokenizer s'il est disponible
-        if tokenizer.chat_template:
-            prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-        else:
-            # Format manuel pour Mistral
-            prompt = ""
-            for message in messages:
-                role = message['role']
-                content = message['content']
-                prompt += f"[INST] {content} [/INST] " if role == "user" else f"{content} "
-            prompt = prompt.strip()
+        # Formater les messages de manière simple et efficace
+        # Pour Ministral-3, utiliser un format basique
+        prompt = ""
+        for msg in messages:
+            if msg['role'] == 'user':
+                prompt += f"[INST] {msg['content']} [/INST] "
+            else:
+                prompt += f"{msg['content']} "
+        
+        # Ajouter un espace et s'assurer que ça se termine bien
+        prompt = prompt.strip() + " "
         
         # Tokenizer le prompt
         inputs = tokenizer(prompt, return_tensors="pt")
@@ -285,7 +280,8 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
                     temperature=temperature,
                     do_sample=True,
                     repetition_penalty=1.1,
-                    pad_token_id=tokenizer.eos_token_id
+                    pad_token_id=tokenizer.eos_token_id,
+                    eos_token_id=tokenizer.eos_token_id
                 )
             else:
                 # Pour Mistral3Model qui retourne Mistral3ModelOutputWithPast
@@ -295,9 +291,10 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
                     temperature=temperature,
                     do_sample=True,
                     repetition_penalty=1.1,
-                    pad_token_id=tokenizer.eos_token_id
+                    pad_token_id=tokenizer.eos_token_id,
+                    eos_token_id=tokenizer.eos_token_id
                 )
-                # Accéder à last_hidden_state au lieu de logits
+                # Accéder à last_hidden_state
                 outputs = outputs.last_hidden_state
                 outputs = torch.argmax(outputs, dim=-1)
         
@@ -310,51 +307,17 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
             response = response[len(prompt):]
         
         # Supprimer les tokens spéciaux
-        tokens_to_remove = ["[INST]", "[/INST]", "<s>", "</s>", "<|im_start|", "<|im_end|"]
+        tokens_to_remove = ['[INST]', '[/INST]', '<s>', '</s>']
         for token in tokens_to_remove:
             response = response.replace(token, "")
+        
+        # Nettoyer les espaces multiples
+        response = ' '.join(response.split())
         
         return response.strip()
     except Exception as e:
         print(f"❌ Erreur lors de la génération: {e}")
-        # Essayer avec un format encore plus simple
-        try:
-            print("ℹ️  Essai avec un format ultra-simple...")
-            simple_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
-            simple_prompt += "\nassistant:"
-            inputs = tokenizer(simple_prompt, return_tensors="pt")
-            device = next(model.parameters()).device
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                if hasattr(model, 'generate'):
-                    outputs = model.generate(
-                        **inputs,
-                        max_new_tokens=max_new_tokens,
-                        temperature=temperature,
-                        do_sample=True,
-                        repetition_penalty=1.1,
-                        pad_token_id=tokenizer.eos_token_id
-                    )
-                else:
-                    outputs = model(
-                        **inputs,
-                        max_new_tokens=max_new_tokens,
-                        temperature=temperature,
-                        do_sample=True,
-                        repetition_penalty=1.1,
-                        pad_token_id=tokenizer.eos_token_id
-                    )
-                    outputs = outputs.last_hidden_state
-                    outputs = torch.argmax(outputs, dim=-1)
-            
-            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            if "assistant:" in response:
-                response = response.split("assistant:")[-1].strip()
-            return response
-        except Exception as e2:
-            print(f"❌ Échec avec le format ultra-simple: {e2}")
-            return None
+        return None
 
 
 def suggest_lighter_models():
