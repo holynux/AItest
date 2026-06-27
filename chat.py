@@ -95,17 +95,6 @@ def get_model_class(model_name):
         return AutoModelForCausalLM
 
 
-def setup_chat_template(tokenizer, model_name):
-    """Configure le chat template pour les modèles qui n'en ont pas"""
-    # Pour les modèles Ministral-3, définir un template de chat
-    if "Ministral-3" in model_name or "Ministral" in model_name:
-        if not tokenizer.chat_template:
-            # Template pour Mistral/Ministral-3 (corrigé avec endfor)
-            tokenizer.chat_template = "{{ bos_token }}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
-            print("ℹ️  Template de chat configuré pour Mistral")
-    return tokenizer
-
-
 def check_gpu_memory(model_name, quantization=None):
     """Vérifie si le GPU a assez de mémoire pour le modèle"""
     model_memory_requirements = get_model_memory_requirements()
@@ -259,24 +248,25 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
     raise last_exception
 
 
-def format_chat_messages(messages):
-    """Formate les messages pour le modèle Mistral"""
-    # Format pour Mistral/Ministral-3
-    formatted = ""
-    for message in messages:
-        role = message['role']
-        content = message['content']
-        formatted += f"<|im_start|>{role}\n{content}<|im_end|>\n"
-    # Ajouter le prompt pour l'assistant
-    formatted += "<|im_start|>assistant\n"
-    return formatted
-
-
 def generate_response(model, tokenizer, messages, max_new_tokens=512, temperature=0.7):
     """Génère une réponse sans utiliser le pipeline (pour éviter les bugs de version)"""
     try:
-        # Formater les messages pour Mistral
-        prompt = format_chat_messages(messages)
+        # Formater les messages pour Mistral/Ministral-3
+        # Utiliser le chat template du tokenizer s'il est disponible
+        if tokenizer.chat_template:
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+        else:
+            # Format manuel pour Mistral
+            prompt = ""
+            for message in messages:
+                role = message['role']
+                content = message['content']
+                prompt += f"[INST] {content} [/INST] " if role == "user" else f"{content} "
+            prompt = prompt.strip()
         
         # Tokenizer le prompt
         inputs = tokenizer(prompt, return_tensors="pt")
@@ -287,7 +277,6 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
         
         # Générer la réponse
         with torch.no_grad():
-            # Pour les modèles Mistral3Model, utiliser __call__ et accéder à last_hidden_state
             if hasattr(model, 'generate'):
                 # Méthode standard pour les modèles avec generate
                 outputs = model.generate(
@@ -315,12 +304,14 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
         # Décoder la réponse
         response = tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # Extraire uniquement la partie générée (après le dernier <|im_start|>assistant)
-        if "<|im_start|>assistant" in response:
-            response = response.split("<|im_start|>assistant")[-1]
+        # Nettoyer la réponse
+        # Supprimer le prompt de la réponse
+        if prompt in response:
+            response = response[len(prompt):]
         
-        # Nettoyer les tokens spéciaux
-        response = response.replace("<|im_end|>", "").replace("<|im_start|>", "")
+        # Supprimer les tokens spéciaux
+        for token in ["[INST]", "[/INST]", "<s>", "</s>", "<|im_start|>", "<|im_end|>"):
+            response = response.replace(token, "")
         
         return response.strip()
     except Exception as e:
@@ -328,7 +319,8 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
         # Essayer avec un format encore plus simple
         try:
             print("ℹ️  Essai avec un format ultra-simple...")
-            simple_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages]) + "\nassistant:"
+            simple_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+            simple_prompt += "\nassistant:"
             inputs = tokenizer(simple_prompt, return_tensors="pt")
             device = next(model.parameters()).device
             inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -352,7 +344,6 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
                         repetition_penalty=1.1,
                         pad_token_id=tokenizer.eos_token_id
                     )
-                    # Accéder à last_hidden_state
                     outputs = outputs.last_hidden_state
                     outputs = torch.argmax(outputs, dim=-1)
             
@@ -503,10 +494,6 @@ def main():
             args.model,
             use_auth_token=True if args.hf_token else None
         )
-        
-        # Configurer le chat template si nécessaire
-        tokenizer = setup_chat_template(tokenizer, args.model)
-        
         print("✅ Tokenizer chargé avec succès!")
         
         # Déterminer le dtype et device_map
