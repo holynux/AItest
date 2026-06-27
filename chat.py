@@ -17,7 +17,7 @@ import os
 import sys
 import time
 import torch
-from huggingface_hub import login, whoami, constants
+from huggingface_hub import login, whoami, constants, snapshot_download
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from pathlib import Path
 
@@ -66,14 +66,25 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=3):
         try:
             print(f"📥 Tentative {attempt + 1}/{max_retries} de téléchargement de {model_name}")
             
+            # Utiliser snapshot_download pour la reprise, puis charger le modèle localement
+            local_dir = get_cache_dir() / "models" / model_name.replace("/", "--")
+            local_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Télécharger avec reprise
+            snapshot_download(
+                repo_id=model_name,
+                local_dir=str(local_dir),
+                local_dir_use_symlinks=False,
+                resume_download=True,
+                use_auth_token=True if os.getenv("HF_TOKEN") else None
+            )
+            
+            # Charger depuis le répertoire local
             model = AutoModelForCausalLM.from_pretrained(
-                model_name,
+                str(local_dir),
                 dtype=dtype,
                 device_map=device_map,
-                resume_download=True,  # Reprise du téléchargement
-                force_download=False,  # Utiliser le cache si disponible
-                local_files_only=False,
-                use_auth_token=True if os.getenv("HF_TOKEN") else None
+                local_files_only=True
             )
             return model
             
@@ -178,8 +189,7 @@ def main():
         print("📥 Téléchargement du tokenizer...")
         tokenizer = AutoTokenizer.from_pretrained(
             args.model,
-            use_auth_token=True if args.hf_token else None,
-            resume_download=True
+            use_auth_token=True if args.hf_token else None
         )
         print("✅ Tokenizer chargé avec succès!")
         
