@@ -286,9 +286,10 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
         inputs = {k: v.to(device) for k, v in inputs.items()}
         
         # Générer la réponse
-        # Pour les modèles Mistral3Model, utiliser __call__ au lieu de generate
-        if hasattr(model, 'generate'):
-            with torch.no_grad():
+        with torch.no_grad():
+            # Pour les modèles Mistral3Model, utiliser __call__ et accéder à last_hidden_state
+            if hasattr(model, 'generate'):
+                # Méthode standard pour les modèles avec generate
                 outputs = model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
@@ -297,9 +298,8 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
                     repetition_penalty=1.1,
                     pad_token_id=tokenizer.eos_token_id
                 )
-        else:
-            # Pour les modèles qui n'ont pas generate (comme Mistral3Model)
-            with torch.no_grad():
+            else:
+                # Pour Mistral3Model qui retourne Mistral3ModelOutputWithPast
                 outputs = model(
                     **inputs,
                     max_new_tokens=max_new_tokens,
@@ -307,7 +307,9 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
                     do_sample=True,
                     repetition_penalty=1.1,
                     pad_token_id=tokenizer.eos_token_id
-                ).logits
+                )
+                # Accéder à last_hidden_state au lieu de logits
+                outputs = outputs.last_hidden_state
                 outputs = torch.argmax(outputs, dim=-1)
         
         # Décoder la réponse
@@ -349,7 +351,9 @@ def generate_response(model, tokenizer, messages, max_new_tokens=512, temperatur
                         do_sample=True,
                         repetition_penalty=1.1,
                         pad_token_id=tokenizer.eos_token_id
-                    ).logits
+                    )
+                    # Accéder à last_hidden_state
+                    outputs = outputs.last_hidden_state
                     outputs = torch.argmax(outputs, dim=-1)
             
             response = tokenizer.decode(outputs[0], skip_special_tokens=True)
