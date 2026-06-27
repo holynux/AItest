@@ -20,7 +20,7 @@ import torch
 import warnings
 import requests
 from huggingface_hub import login, whoami, constants, snapshot_download, HfApi
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, MistralForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, MistralForCausalLM, AutoModel
 from pathlib import Path
 
 # Ignorer les avertissements de dépréciation de huggingface_hub
@@ -84,10 +84,9 @@ def get_model_memory_requirements():
 
 def get_model_class(model_name):
     """Retourne la classe de modèle appropriée en fonction du nom"""
-    # Pour les modèles Mistral-3, utiliser AutoModelForCausalLM avec trust_remote_code
-    # car Mistral3ForCausalLM n'existe pas encore dans transformers
+    # Pour les modèles Ministral-3, utiliser AutoModel (plus générique)
     if "Ministral-3" in model_name:
-        return AutoModelForCausalLM
+        return AutoModel  # ✅ AutoModel supporte Mistral3Config
     # Pour les autres modèles Mistral
     elif "Mistral" in model_name or "Mixtral" in model_name:
         return MistralForCausalLM
@@ -385,12 +384,13 @@ def main():
             suggest_lighter_models()
         elif "Unrecognized configuration class" in error_msg:
             print("\n⚠️  Problème de configuration détecté!")
-            print("   Essayez avec --local-model si le modèle est déjà téléchargé.")
-            print("   Pour Ministral-3, assurez-vous d'utiliser trust_remote_code=True")
+            print("   Solution 1: Mettez à jour transformers: pip install --upgrade transformers")
+            print("   Solution 2: Utilisez --local-model avec les fichiers déjà téléchargés")
+            print("   Solution 3: Essayez un autre modèle (ex: mistralai/Mistral-7B-v0.1)")
         elif "'dict' object has no attribute 'to_dict'" in error_msg:
             print("\n⚠️  Problème de configuration Ministral-3 détecté!")
-            print("   Solution: Utilisez --local-model avec les fichiers déjà téléchargés")
-            print("   Ou attendez la mise à jour de transformers")
+            print("   Solution: Mettez à jour transformers: pip install --upgrade transformers")
+            print("   Ou utilisez --local-model avec les fichiers déjà téléchargés")
         elif "Connection" in error_msg or "Timeout" in error_msg or "RST" in error_msg:
             print("\n⚠️  Problème de connexion réseau détecté!")
             print("   Essayez ces solutions:")
@@ -400,10 +400,11 @@ def main():
             print("   4. Utilisez --download-only pour télécharger d'abord")
         
         print("\nSolutions possibles:")
-        print("1. Vérifiez le nom du modèle (ex: mistralai/Ministral-3-3B-Instruct-2512)")
-        print("2. Essayez un modèle plus léger")
-        print("3. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
-        print("4. Vérifiez votre connexion internet")
+        print("1. Mettez à jour transformers: pip install --upgrade transformers")
+        print("2. Vérifiez le nom du modèle (ex: mistralai/Ministral-3-3B-Instruct-2512)")
+        print("3. Essayez un modèle plus léger")
+        print("4. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
+        print("5. Vérifiez votre connexion internet")
         return
 
     # Création du pipeline de chat
