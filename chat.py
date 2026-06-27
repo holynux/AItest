@@ -3,16 +3,19 @@
 CLI simple pour discuter avec un modèle Mistral léger en utilisant CUDA.
 
 Utilisation:
-    python chat.py [--model MODELE] [--device DEVICE]
+    python chat.py [--model MODELE] [--device DEVICE] [--hf-token TOKEN]
 
 Exemples:
     python chat.py
     python chat.py --model mistralai/Mistral-7B-v0.1
     python chat.py --device cuda:0
+    python chat.py --hf-token votre_token_huggingface
 """
 
 import argparse
+import os
 import torch
+from huggingface_hub import login
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 
@@ -29,6 +32,12 @@ def main():
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Appareil à utiliser (cuda, cpu, etc.)"
+    )
+    parser.add_argument(
+        "--hf-token",
+        type=str,
+        default=os.getenv("HF_TOKEN"),
+        help="Token HuggingFace pour des téléchargements plus rapides (optionnel)"
     )
     parser.add_argument(
         "--max-new-tokens",
@@ -53,6 +62,17 @@ def main():
         print(f"✅ CUDA disponible: {torch.cuda.get_device_name(0)}")
     else:
         print("⚠️  CUDA non disponible, utilisation du CPU")
+
+    # Authentification HuggingFace si token fourni
+    if args.hf_token:
+        try:
+            login(token=args.hf_token)
+            print("✅ Authentification HuggingFace réussie")
+        except Exception as e:
+            print(f"⚠️  Échec de l'authentification HuggingFace: {e}")
+    else:
+        print("ℹ️  Pas de token HuggingFace trouvé. Utilisation des limites anonymes.")
+        print("   Pour de meilleurs performances, utilisez --hf-token ou exportez HF_TOKEN")
 
     print(f"\n🔍 Chargement du modèle: {args.model}")
     print(f"📍 Appareil: {args.device}\n")
