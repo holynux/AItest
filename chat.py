@@ -95,48 +95,6 @@ def get_model_class(model_name):
         return AutoModelForCausalLM
 
 
-def apply_quantization(model, quantization):
-    """Applique la quantification au modèle"""
-    if quantization == "4bit":
-        try:
-            from transformers import BitsAndBytesConfig
-            # Charger avec quantification 4-bit
-            print("🔢 Application de la quantification 4-bit...")
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=False
-            )
-            model = model.to(torch.float16)  # Convertir en float16 pour la compatibilité
-            print("✅ Modèle quantifié en 4-bit")
-            return model, quantization_config
-        except ImportError:
-            print("⚠️  bitsandbytes non installé. Installation...")
-            import subprocess
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "bitsandbytes", "accelerate", "--quiet"])
-            print("✅ bitsandbytes installé. Veuillez réessayer.")
-            sys.exit(1)
-    elif quantization == "8bit":
-        try:
-            from transformers import BitsAndBytesConfig
-            # Charger avec quantification 8-bit
-            print("🔢 Application de la quantification 8-bit...")
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True
-            )
-            model = model.to(torch.float16)
-            print("✅ Modèle quantifié en 8-bit")
-            return model, quantization_config
-        except ImportError:
-            print("⚠️  bitsandbytes non installé. Installation...")
-            import subprocess
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "bitsandbytes", "accelerate", "--quiet"])
-            print("✅ bitsandbytes installé. Veuillez réessayer.")
-            sys.exit(1)
-    return model, None
-
-
 def check_gpu_memory(model_name, quantization=None):
     """Vérifie si le GPU a assez de mémoire pour le modèle"""
     model_memory_requirements = get_model_memory_requirements()
@@ -288,6 +246,36 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
                 time.sleep(wait_time)
     
     raise last_exception
+
+
+def generate_response(model, tokenizer, prompt, max_new_tokens=512, temperature=0.7):
+    """Génère une réponse sans utiliser le pipeline (pour éviter les bugs de version)"""
+    try:
+        # Tokenizer le prompt
+        inputs = tokenizer(prompt, return_tensors="pt")
+        
+        # Générer la réponse
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                do_sample=True,
+                repetition_penalty=1.1,
+                pad_token_id=tokenizer.eos_token_id
+            )
+        
+        # Décoder la réponse
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Extraire uniquement la partie générée (après le prompt)
+        if prompt in response:
+            response = response[len(prompt):]
+        
+        return response
+    except Exception as e:
+        print(f"❌ Erreur lors de la génération: {e}")
+        return None
 
 
 def suggest_lighter_models():
@@ -535,18 +523,7 @@ def main():
         print("6. Vérifiez votre connexion internet")
         return
 
-    # Création du pipeline de chat
-    pipe = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
-        device=0 if args.device.startswith("cuda") else -1,
-        max_new_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        do_sample=True,
-        repetition_penalty=1.1
-    )
-
+    # Utiliser la génération directe au lieu du pipeline (pour éviter les bugs de version)
     print("💬 Bienvenue dans le chat Mistral!")
     print("Tapez 'quit', 'exit' ou 'q' pour quitter.\n")
 
@@ -573,20 +550,21 @@ def main():
                 add_generation_prompt=True
             )
             
-            # Génération de la réponse
+            # Génération de la réponse (sans pipeline)
             print("Mistral: ", end="", flush=True)
-            outputs = pipe(
-                prompt,
-                return_full_text=False,
-                streamer=None
+            assistant_response = generate_response(
+                model, tokenizer, prompt,
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature
             )
             
-            # Extraction et affichage de la réponse
-            assistant_response = outputs[0]['generated_text']
-            print(assistant_response)
-            
-            # Ajout de la réponse à l'historique
-            messages.append({"role": "assistant", "content": assistant_response})
+            if assistant_response:
+                print(assistant_response)
+                # Ajout de la réponse à l'historique
+                messages.append({"role": "assistant", "content": assistant_response})
+            else:
+                print("❌ Échec de la génération de la réponse")
+                break
             
         except KeyboardInterrupt:
             print("\n👋 Au revoir!")
