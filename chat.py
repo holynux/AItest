@@ -95,6 +95,17 @@ def get_model_class(model_name):
         return AutoModelForCausalLM
 
 
+def setup_chat_template(tokenizer, model_name):
+    """Configure le chat template pour les modèles qui n'en ont pas"""
+    # Pour les modèles Ministral-3, définir un template de chat
+    if "Ministral-3" in model_name or "Ministral" in model_name:
+        if not tokenizer.chat_template:
+            # Template pour Mistral/Ministral-3
+            tokenizer.chat_template = "{{ bos_token }}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}"
+            print("ℹ️  Template de chat configuré pour Mistral")
+    return tokenizer
+
+
 def check_gpu_memory(model_name, quantization=None):
     """Vérifie si le GPU a assez de mémoire pour le modèle"""
     model_memory_requirements = get_model_memory_requirements()
@@ -248,11 +259,22 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
     raise last_exception
 
 
-def generate_response(model, tokenizer, prompt, max_new_tokens=512, temperature=0.7):
+def generate_response(model, tokenizer, messages, max_new_tokens=512, temperature=0.7):
     """Génère une réponse sans utiliser le pipeline (pour éviter les bugs de version)"""
     try:
+        # Appliquer le chat template manuellement
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        
         # Tokenizer le prompt
         inputs = tokenizer(prompt, return_tensors="pt")
+        
+        # Déplacer les inputs sur le bon device
+        if next(model.parameters()).is_cuda:
+            inputs = {k: v.to('cuda') for k, v in inputs.items()}
         
         # Générer la réponse
         with torch.no_grad():
@@ -275,7 +297,29 @@ def generate_response(model, tokenizer, prompt, max_new_tokens=512, temperature=
         return response
     except Exception as e:
         print(f"❌ Erreur lors de la génération: {e}")
-        return None
+        # Essayer avec un format simple si le chat template échoue
+        try:
+            print("ℹ️  Essai avec un format simple...")
+            simple_prompt = "\n\n".join([f"{msg['role']}: {msg['content']}" for msg in messages]) + "\nassistant:"
+            inputs = tokenizer(simple_prompt, return_tensors="pt")
+            if next(model.parameters()).is_cuda:
+                inputs = {k: v.to('cuda') for k, v in inputs.items()}
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    do_sample=True,
+                    repetition_penalty=1.1,
+                    pad_token_id=tokenizer.eos_token_id
+                )
+            response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            if simple_prompt in response:
+                response = response[len(simple_prompt):]
+            return response
+        except Exception as e2:
+            print(f"❌ Échec avec le format simple: {e2}")
+            return None
 
 
 def suggest_lighter_models():
@@ -416,6 +460,10 @@ def main():
             args.model,
             use_auth_token=True if args.hf_token else None
         )
+        
+        # Configurer le chat template si nécessaire
+        tokenizer = setup_chat_template(tokenizer, args.model)
+        
         print("✅ Tokenizer chargé avec succès!")
         
         # Déterminer le dtype et device_map
@@ -543,17 +591,10 @@ def main():
             # Ajout du message utilisateur
             messages.append({"role": "user", "content": user_input})
             
-            # Préparation du prompt
-            prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-            
             # Génération de la réponse (sans pipeline)
             print("Mistral: ", end="", flush=True)
             assistant_response = generate_response(
-                model, tokenizer, prompt,
+                model, tokenizer, messages,
                 max_new_tokens=args.max_new_tokens,
                 temperature=args.temperature
             )
