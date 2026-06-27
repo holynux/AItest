@@ -10,6 +10,7 @@ Exemples:
     python chat.py --model mistralai/Ministral-3-3B-Instruct-2512
     python chat.py --device cuda:0
     python chat.py --hf-token votre_token_huggingface
+    python chat.py --model mistralai/Ministral-3-3B-Base-2512 --quantize 4bit
 """
 
 import argparse
@@ -94,7 +95,49 @@ def get_model_class(model_name):
         return AutoModelForCausalLM
 
 
-def check_gpu_memory(model_name):
+def apply_quantization(model, quantization):
+    """Applique la quantification au modèle"""
+    if quantization == "4bit":
+        try:
+            from transformers import BitsAndBytesConfig
+            # Charger avec quantification 4-bit
+            print("🔢 Application de la quantification 4-bit...")
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=False
+            )
+            model = model.to(torch.float16)  # Convertir en float16 pour la compatibilité
+            print("✅ Modèle quantifié en 4-bit")
+            return model, quantization_config
+        except ImportError:
+            print("⚠️  bitsandbytes non installé. Installation...")
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "bitsandbytes", "accelerate", "--quiet"])
+            print("✅ bitsandbytes installé. Veuillez réessayer.")
+            sys.exit(1)
+    elif quantization == "8bit":
+        try:
+            from transformers import BitsAndBytesConfig
+            # Charger avec quantification 8-bit
+            print("🔢 Application de la quantification 8-bit...")
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True
+            )
+            model = model.to(torch.float16)
+            print("✅ Modèle quantifié en 8-bit")
+            return model, quantization_config
+        except ImportError:
+            print("⚠️  bitsandbytes non installé. Installation...")
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "bitsandbytes", "accelerate", "--quiet"])
+            print("✅ bitsandbytes installé. Veuillez réessayer.")
+            sys.exit(1)
+    return model, None
+
+
+def check_gpu_memory(model_name, quantization=None):
     """Vérifie si le GPU a assez de mémoire pour le modèle"""
     model_memory_requirements = get_model_memory_requirements()
     
@@ -107,12 +150,19 @@ def check_gpu_memory(model_name):
         # Vérifier si le modèle est connu, sinon estimer à 14 Go (pour les modèles Mistral-7B par défaut)
         required_memory = model_memory_requirements.get(model_name, 14)
         
+        # Réduire les exigences si quantification
+        if quantization == "4bit":
+            required_memory *= 0.4  # 4-bit utilise ~40% de la mémoire
+        elif quantization == "8bit":
+            required_memory *= 0.6  # 8-bit utilise ~60% de la mémoire
+        
         if available_memory_gb < required_memory:
-            print(f"⚠️  Mémoire GPU insuffisante pour {model_name} (nécessite ~{required_memory} Go)")
+            print(f"⚠️  Mémoire GPU insuffisante pour {model_name} (nécessite ~{required_memory:.1f} Go avec {quantization or 'pas de'} quantification)")
             print("   Modèles compatibles avec votre GPU:")
             for light_model, light_req in model_memory_requirements.items():
-                if light_req <= available_memory_gb:
-                    print(f"   ✅ {light_model} (~{light_req} Go)")
+                adjusted_req = light_req * (0.4 if quantization == "4bit" else 0.6 if quantization == "8bit" else 1.0)
+                if adjusted_req <= available_memory_gb:
+                    print(f"   ✅ {light_model} (~{adjusted_req:.1f} Go avec {quantization or 'pas de'} quantification)")
             return False
         return True
     return True  # Pas de GPU, on utilise le CPU
@@ -139,7 +189,7 @@ def check_internet_connection():
     return False
 
 
-def download_model_with_retry(model_name, dtype, device_map, max_retries=5):
+def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quantization=None):
     """Télécharge le modèle avec gestion des erreurs et reprise"""
     # Obtenir la classe de modèle appropriée
     model_class = get_model_class(model_name)
@@ -185,13 +235,46 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5):
             # Pour Ministral-3, il faut utiliser trust_remote_code=True
             is_ministral3 = "Ministral-3" in model_name
             
-            model = model_class.from_pretrained(
-                str(local_dir),
-                dtype=dtype,
-                device_map=device_map,
-                local_files_only=True,
-                trust_remote_code=is_ministral3  # ✅ Important pour Ministral-3
-            )
+            # Si quantification demandée, utiliser BitsAndBytesConfig
+            if quantization:
+                try:
+                    from transformers import BitsAndBytesConfig
+                    
+                    if quantization == "4bit":
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=dtype,
+                            bnb_4bit_quant_type="nf4",
+                            bnb_4bit_use_double_quant=False
+                        )
+                    elif quantization == "8bit":
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_8bit=True
+                        )
+                    
+                    model = model_class.from_pretrained(
+                        str(local_dir),
+                        dtype=dtype,
+                        device_map=device_map,
+                        local_files_only=True,
+                        trust_remote_code=is_ministral3,
+                        quantization_config=quantization_config
+                    )
+                except ImportError:
+                    print("⚠️  bitsandbytes non installé. Installation...")
+                    import subprocess
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "bitsandbytes", "accelerate", "--quiet"])
+                    print("✅ bitsandbytes installé. Veuillez réessayer.")
+                    sys.exit(1)
+            else:
+                model = model_class.from_pretrained(
+                    str(local_dir),
+                    dtype=dtype,
+                    device_map=device_map,
+                    local_files_only=True,
+                    trust_remote_code=is_ministral3
+                )
+            
             return model
             
         except Exception as e:
@@ -224,7 +307,8 @@ def suggest_lighter_models():
     
     print("\n💡 Autres options:")
     print("  • Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
-    print("  • Essayez des modèles plus petits si disponibles")
+    print("  • Utilisez --quantize 4bit pour réduire la mémoire de ~60%")
+    print("  • Utilisez --quantize 8bit pour réduire la mémoire de ~40%")
 
 
 def main():
@@ -275,6 +359,13 @@ def main():
         default=5,
         help="Nombre maximum de tentatives de téléchargement (par défaut: 5)"
     )
+    parser.add_argument(
+        "--quantize",
+        type=str,
+        choices=["4bit", "8bit"],
+        default=None,
+        help="Utiliser la quantification pour réduire la mémoire (4bit ou 8bit)"
+    )
     args = parser.parse_args()
 
     # Vérification de CUDA
@@ -306,7 +397,7 @@ def main():
 
     # Vérification de la mémoire GPU
     if args.device.startswith("cuda"):
-        if not check_gpu_memory(args.model):
+        if not check_gpu_memory(args.model, args.quantize):
             suggest_lighter_models()
             print("\n❌ Arrêt: Modèle trop grand pour votre GPU")
             return
@@ -324,7 +415,10 @@ def main():
         clear_cache_if_needed()
 
     print(f"\n🔍 Chargement du modèle: {args.model}")
-    print(f"📍 Appareil: {args.device}\n")
+    print(f"📍 Appareil: {args.device}")
+    if args.quantize:
+        print(f"🔢 Quantification: {args.quantize}")
+    print()
 
     # Chargement du tokenizer et du modèle
     try:
@@ -348,16 +442,48 @@ def main():
             model_class = get_model_class(args.model)
             is_ministral3 = "Ministral-3" in args.model
             
-            model = model_class.from_pretrained(
-                args.model,
-                dtype=dtype,
-                device_map=device_map,
-                local_files_only=True,
-                trust_remote_code=is_ministral3  # ✅ Important pour Ministral-3
-            )
+            # Si quantification demandée, utiliser BitsAndBytesConfig
+            if args.quantize:
+                try:
+                    from transformers import BitsAndBytesConfig
+                    
+                    if args.quantize == "4bit":
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=dtype,
+                            bnb_4bit_quant_type="nf4",
+                            bnb_4bit_use_double_quant=False
+                        )
+                    elif args.quantize == "8bit":
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_8bit=True
+                        )
+                    
+                    model = model_class.from_pretrained(
+                        args.model,
+                        dtype=dtype,
+                        device_map=device_map,
+                        local_files_only=True,
+                        trust_remote_code=is_ministral3,
+                        quantization_config=quantization_config
+                    )
+                except ImportError:
+                    print("⚠️  bitsandbytes non installé. Installation...")
+                    import subprocess
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "bitsandbytes", "accelerate", "--quiet"])
+                    print("✅ bitsandbytes installé. Veuillez réessayer.")
+                    sys.exit(1)
+            else:
+                model = model_class.from_pretrained(
+                    args.model,
+                    dtype=dtype,
+                    device_map=device_map,
+                    local_files_only=True,
+                    trust_remote_code=is_ministral3
+                )
         else:
             model = download_model_with_retry(
-                args.model, dtype, device_map, max_retries=args.max_retries
+                args.model, dtype, device_map, max_retries=args.max_retries, quantization=args.quantize
             )
         
         if args.device.startswith("cuda"):
@@ -381,6 +507,7 @@ def main():
             suggest_lighter_models()
         elif "CUDA out of memory" in error_msg or "out of memory" in error_msg.lower():
             print("\n⚠️  Problème de mémoire détecté!")
+            print("   Essayez avec --quantize 4bit ou --device cpu")
             suggest_lighter_models()
         elif "Unrecognized configuration class" in error_msg:
             print("\n⚠️  Problème de configuration détecté!")
@@ -404,7 +531,8 @@ def main():
         print("2. Vérifiez le nom du modèle (ex: mistralai/Ministral-3-3B-Instruct-2512)")
         print("3. Essayez un modèle plus léger")
         print("4. Utilisez --device cpu (plus lent mais pas de limite de mémoire)")
-        print("5. Vérifiez votre connexion internet")
+        print("5. Utilisez --quantize 4bit pour réduire la mémoire")
+        print("6. Vérifiez votre connexion internet")
         return
 
     # Création du pipeline de chat
