@@ -20,6 +20,7 @@ import time
 import torch
 import warnings
 import requests
+import shutil
 from huggingface_hub import login, whoami, constants, snapshot_download, HfApi
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, MistralForCausalLM, AutoModel
 from pathlib import Path
@@ -36,6 +37,42 @@ def get_cache_dir():
 def get_local_model_path(model_name):
     """Retourne le chemin local du modèle"""
     return get_cache_dir() / "models" / model_name.replace("/", "--")
+
+
+def resolve_symlinks_in_dir(directory):
+    """Résout les liens symboliques dans un répertoire (pour git-lfs)"""
+    import subprocess
+    
+    # Vérifier si le dossier contient des liens symboliques git-lfs
+    if (directory / "blobs").exists() and (directory / "refs").exists():
+        print(f"ℹ️  Résolution des liens symboliques git-lfs dans {directory}...")
+        
+        # Trouver le snapshot
+        snapshots = list(directory.glob("snapshots/*"))
+        if snapshots:
+            snapshot_dir = snapshots[0]
+            print(f"   Dossier snapshot: {snapshot_dir}")
+            
+            # Créer un dossier temporaire pour les fichiers résolus
+            resolved_dir = directory / "resolved"
+            resolved_dir.mkdir(exist_ok=True)
+            
+            # Copier et résoudre les liens
+            for item in snapshot_dir.iterdir():
+                if item.is_symlink():
+                    target = item.resolve()
+                    dest = resolved_dir / item.name
+                    if target.exists():
+                        shutil.copy2(target, dest)
+                    else:
+                        print(f"   ⚠️  Cible introuvable: {target}")
+                else:
+                    shutil.copy2(item, resolved_dir / item.name)
+            
+            print(f"   ✅ Fichiers résolus dans {resolved_dir}")
+            return resolved_dir
+    
+    return directory
 
 
 def check_disk_space(model_name, required_space_gb=14):
@@ -163,22 +200,25 @@ def check_internet_connection():
 
 def check_model_files_exist(local_dir):
     """Vérifie si les fichiers du modèle existent dans le répertoire local"""
+    # Résoudre les liens symboliques git-lfs
+    resolved_dir = resolve_symlinks_in_dir(local_dir)
+    
     # Chercher tous les fichiers de modèle
-    model_files = list(local_dir.glob("**/*.safetensors")) + list(local_dir.glob("**/*.bin"))
-    config_files = list(local_dir.glob("**/config.json"))
+    model_files = list(resolved_dir.glob("**/*.safetensors")) + list(resolved_dir.glob("**/*.bin"))
+    config_files = list(resolved_dir.glob("**/config.json"))
     
     if not model_files:
-        print(f"⚠️  Aucun fichier de modèle trouvé dans {local_dir}")
+        print(f"⚠️  Aucun fichier de modèle trouvé dans {resolved_dir}")
         print("   Vérifiez que le modèle a été téléchargé")
-        return False
+        return False, None
     
     if not config_files:
-        print(f"⚠️  Aucun fichier config.json trouvé dans {local_dir}")
+        print(f"⚠️  Aucun fichier config.json trouvé dans {resolved_dir}")
         print("   Le modèle peut être incomplet")
-        return False
+        return False, None
     
     print(f"✅ {len(model_files)} fichiers de modèle et {len(config_files)} config trouvés")
-    return True
+    return True, resolved_dir
 
 
 def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quantization=None):
@@ -217,7 +257,8 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
             )
             
             # Vérifier que les fichiers ont été téléchargés
-            if not check_model_files_exist(local_dir):
+            files_ok, resolved_dir = check_model_files_exist(local_dir)
+            if not files_ok:
                 raise Exception("Fichiers du modèle manquants après téléchargement")
             
             # Charger depuis le répertoire local avec la bonne classe de modèle
@@ -242,7 +283,7 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
                         )
                     
                     model = model_class.from_pretrained(
-                        str(local_dir),
+                        str(resolved_dir),
                         dtype=dtype,
                         device_map=device_map,
                         trust_remote_code=is_ministral3,
@@ -256,7 +297,7 @@ def download_model_with_retry(model_name, dtype, device_map, max_retries=5, quan
                     sys.exit(1)
             else:
                 model = model_class.from_pretrained(
-                    str(local_dir),
+                    str(resolved_dir),
                     dtype=dtype,
                     device_map=device_map,
                     trust_remote_code=is_ministral3
@@ -500,19 +541,25 @@ def main():
         if args.local_model:
             # Vérifier que les fichiers existent localement
             local_dir = get_local_model_path(args.model)
-            if not check_model_files_exist(local_dir):
-                print(f"\n❌ Modèle non trouvé dans {local_dir}")
+            files_ok, resolved_dir = check_model_files_exist(local_dir)
+            if not files_ok:
+                print(f"\n❌ Modèle non trouvé ou incomplet dans {local_dir}")
                 print("   Utilisez d'abord --download-only pour télécharger le modèle")
                 print(f"   Ou vérifiez que le modèle est dans: {local_dir}")
+                print("\n   Si vos fichiers sont dans un autre dossier, vous pouvez:")
+                print(f"   1. Créer un lien symbolique:")
+                print(f"      ln -s /votre/chemin/mistralai--Mistral-7B-v0.1 {local_dir}")
+                print(f"   2. Utiliser HF_HOME:")
+                print(f"      export HF_HOME=/votre/chemin/hub")
                 return
             
             # Obtenir la classe de modèle appropriée
             model_class = get_model_class(args.model)
             is_ministral3 = "Ministral-3" in args.model
             
-            # Charger depuis le chemin local
+            # Charger depuis le chemin local (avec fichiers résolus)
             model = model_class.from_pretrained(
-                str(local_dir),
+                str(resolved_dir),
                 dtype=dtype,
                 device_map=device_map,
                 trust_remote_code=is_ministral3
