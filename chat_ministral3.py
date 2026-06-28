@@ -43,6 +43,26 @@ def get_local_model_path():
     return get_cache_dir() / "models" / MODEL_NAME.replace("/", "--")
 
 
+def check_model_exists_locally():
+    """Vérifie si le modèle existe déjà localement dans HF_HOME"""
+    local_dir = get_local_model_path()
+    
+    # Vérifier si le répertoire existe
+    if not local_dir.exists():
+        return False, None
+    
+    # Vérifier la présence des fichiers essentiels
+    config_file = local_dir / "config.json"
+    model_files = list(local_dir.glob("**/*.safetensors")) + list(local_dir.glob("**/*.bin"))
+    
+    if config_file.exists() and model_files:
+        print(f"✅ Modèle trouvé localement dans: {local_dir}")
+        return True, local_dir
+    else:
+        print(f"⚠️  Répertoire {local_dir} existe mais semble incomplet.")
+        return False, local_dir
+
+
 def check_gpu_memory(quantization=None):
     """Vérifie si le GPU a assez de mémoire pour Ministral-3-3B-Base-2512"""
     if torch.cuda.is_available():
@@ -102,14 +122,14 @@ def download_model(quantization=None):
 
 def load_model_and_tokenizer(device, quantization=None):
     """Charge le modèle et le tokenizer pour Ministral-3-3B-Base-2512"""
-    local_dir = get_local_model_path()
+    # Vérifier d'abord si le modèle existe localement dans HF_HOME
+    model_exists, local_dir = check_model_exists_locally()
     
-    # Vérifier si le modèle est déjà téléchargé
-    if not local_dir.exists():
-        print(f"⚠️  Modèle non trouvé dans {local_dir}. Téléchargement...")
-        download_model(quantization)
+    if not model_exists:
+        print(f"⚠️  Modèle non trouvé dans {get_cache_dir()}. Téléchargement...")
+        local_dir = download_model(quantization)
     
-    # Charger le tokenizer
+    # Charger le tokenizer depuis le répertoire local
     print("📖 Chargement du tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
         str(local_dir),
