@@ -41,8 +41,6 @@ def get_local_model_path(model_name):
 
 def resolve_symlinks_in_dir(directory):
     """Résout les liens symboliques dans un répertoire (pour git-lfs)"""
-    import subprocess
-    
     # Vérifier si le dossier contient des liens symboliques git-lfs
     if (directory / "blobs").exists() and (directory / "refs").exists():
         print(f"ℹ️  Résolution des liens symboliques git-lfs dans {directory}...")
@@ -523,21 +521,7 @@ def main():
 
     # Chargement du tokenizer et du modèle
     try:
-        # Charger le tokenizer d'abord (plus petit)
-        print("📥 Téléchargement du tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            args.model,
-            use_auth_token=True if args.hf_token else None
-        )
-        print("✅ Tokenizer chargé avec succès!")
-        
-        # Déterminer le dtype et device_map
-        dtype = torch.float16 if args.device.startswith("cuda") else torch.float32
-        device_map = args.device if args.device.startswith("cuda") else "cpu"
-        
-        # Charger le modèle
-        print("📥 Chargement du modèle...")
-        
+        # Charger le tokenizer et le modèle depuis le même chemin local
         if args.local_model:
             # Vérifier que les fichiers existent localement
             local_dir = get_local_model_path(args.model)
@@ -548,23 +532,79 @@ def main():
                 print(f"   Ou vérifiez que le modèle est dans: {local_dir}")
                 print("\n   Si vos fichiers sont dans un autre dossier, vous pouvez:")
                 print(f"   1. Créer un lien symbolique:")
-                print(f"      ln -s /votre/chemin/mistralai--Mistral-7B-v0.1 {local_dir}")
+                print(f"      ln -s /votre/chemin/mistralai--Ministral-3-3B-Base-2512 {local_dir}")
                 print(f"   2. Utiliser HF_HOME:")
                 print(f"      export HF_HOME=/votre/chemin/hub")
                 return
+            
+            print("📥 Chargement du tokenizer depuis les fichiers locaux...")
+            tokenizer = AutoTokenizer.from_pretrained(
+                str(resolved_dir),
+                use_auth_token=True if args.hf_token else None
+            )
+            print("✅ Tokenizer chargé avec succès!")
+            
+            # Déterminer le dtype et device_map
+            dtype = torch.float16 if args.device.startswith("cuda") else torch.float32
+            device_map = args.device if args.device.startswith("cuda") else "cpu"
+            
+            print("📥 Chargement du modèle depuis les fichiers locaux...")
             
             # Obtenir la classe de modèle appropriée
             model_class = get_model_class(args.model)
             is_ministral3 = "Ministral-3" in args.model
             
-            # Charger depuis le chemin local (avec fichiers résolus)
-            model = model_class.from_pretrained(
-                str(resolved_dir),
-                dtype=dtype,
-                device_map=device_map,
-                trust_remote_code=is_ministral3
-            )
+            # Si quantification demandée, utiliser BitsAndBytesConfig
+            if args.quantize:
+                try:
+                    from transformers import BitsAndBytesConfig
+                    
+                    if args.quantize == "4bit":
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=dtype,
+                            bnb_4bit_quant_type="nf4",
+                            bnb_4bit_use_double_quant=False
+                        )
+                    elif args.quantize == "8bit":
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_8bit=True
+                        )
+                    
+                    model = model_class.from_pretrained(
+                        str(resolved_dir),
+                        dtype=dtype,
+                        device_map=device_map,
+                        trust_remote_code=is_ministral3,
+                        quantization_config=quantization_config
+                    )
+                except ImportError:
+                    print("⚠️  bitsandbytes non installé. Installation...")
+                    import subprocess
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "bitsandbytes", "accelerate", "--quiet"])
+                    print("✅ bitsandbytes installé. Veuillez réessayer.")
+                    sys.exit(1)
+            else:
+                model = model_class.from_pretrained(
+                    str(resolved_dir),
+                    dtype=dtype,
+                    device_map=device_map,
+                    trust_remote_code=is_ministral3
+                )
         else:
+            # Télécharger le tokenizer et le modèle
+            print("📥 Téléchargement du tokenizer...")
+            tokenizer = AutoTokenizer.from_pretrained(
+                args.model,
+                use_auth_token=True if args.hf_token else None
+            )
+            print("✅ Tokenizer chargé avec succès!")
+            
+            # Déterminer le dtype et device_map
+            dtype = torch.float16 if args.device.startswith("cuda") else torch.float32
+            device_map = args.device if args.device.startswith("cuda") else "cpu"
+            
+            print("📥 Téléchargement du modèle (cela peut prendre du temps)...")
             model = download_model_with_retry(
                 args.model, dtype, device_map, max_retries=args.max_retries, quantization=args.quantize
             )
